@@ -1,15 +1,40 @@
 #include <vamp_python_init.hh>
 
 #include <vamp/planning/roadmap.hh>
+#include <vamp/planning/pprm.hh>
 #include <vamp/planning/rrtc_settings.hh>
 #include <vamp/planning/aorrtc_settings.hh>
 #include <vamp/planning/grrtstar_settings.hh>
 #include <vamp/planning/simplify_settings.hh>
 
+#include <nanobind/ndarray.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
+
+#include <cstring>
+#include <stdexcept>
+#include <string>
+
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
 
 namespace nb = nanobind;
 namespace vp = vamp::planning;
+
+namespace
+{
+    // Copy n * columns values into a new numpy array
+    template <typename T>
+    auto numpy_copy(const void *data, std::size_t n, std::size_t columns)
+    {
+        auto *copy = new T[n * columns];
+        std::memcpy(copy, data, n * columns * sizeof(T));
+        nb::capsule owner(copy, [](void *a) noexcept { delete[] reinterpret_cast<T *>(a); });
+        return columns == 1 ? nb::ndarray<nb::numpy, T>(copy, {n}, owner) :
+                              nb::ndarray<nb::numpy, T>(copy, {n, columns}, owner);
+    }
+}  // namespace
 
 void vamp::binding::init_settings(nanobind::module_ &pymodule)
 {
@@ -77,9 +102,86 @@ void vamp::binding::init_settings(nanobind::module_ &pymodule)
         .def(nb::init<vp::PRMStarNeighborParams>())
         .def_rw("max_iterations", &PRMStarSettings::max_iterations)
         .def_rw("max_samples", &PRMStarSettings::max_samples)
+        .def_rw("batch_size", &PRMStarSettings::batch_size)
         .def_rw("neighbor_params", &PRMStarSettings::neighbor_params)
         .def("max_neighbors", &PRMStarSettings::max_neighbors)
         .def("neighbor_radius", &PRMStarSettings::neighbor_radius);
+
+    using namespace nb::literals;
+
+    nb::class_<vp::RoadmapGraph>(pymodule, "RoadmapGraph", "Edges of a roadmap, each undirected edge once.")
+        .def(
+            "__len__", [](const vp::RoadmapGraph &g) { return g.edges.size(); }, "Number of edges.")
+        .def_prop_ro(
+            "edges",
+            [](const vp::RoadmapGraph &g)
+            { return numpy_copy<std::uint32_t>(g.edges.data(), g.edges.size(), 2); },
+            nb::rv_policy::move,
+            "Vertex index pairs (i, j) with i < j, as an (n, 2) numpy matrix.");
+
+    nb::class_<vp::RoadmapValidity>(
+        pymodule, "RoadmapValidity", "Which vertices and edges of a roadmap are collision-free.")
+        .def_prop_ro(
+            "vertices",
+            [](const vp::RoadmapValidity &v)
+            { return numpy_copy<bool>(v.vertices.data(), v.vertices.size(), 1); },
+            nb::rv_policy::move,
+            "One boolean per roadmap vertex.")
+        .def_prop_ro(
+            "edges",
+            [](const vp::RoadmapValidity &v) { return numpy_copy<bool>(v.edges.data(), v.edges.size(), 1); },
+            nb::rv_policy::move,
+            "One boolean per edge of the RoadmapGraph.");
+
+    pymodule.def(
+        "max_threads",
+        []() -> int
+        {
+#if defined(_OPENMP)
+            return omp_get_max_threads();
+#else
+            return 1;
+#endif
+        },
+        "Number of threads the parallel roadmap functions use. Always 1 when built without OpenMP.");
+
+    pymodule.def(
+        "set_num_threads",
+        []([[maybe_unused]] int threads)
+        {
+#if defined(_OPENMP)
+            omp_set_num_threads(threads);
+#endif
+        },
+        "threads"_a,
+        "Set the number of threads the parallel roadmap functions use, for the calling thread.");
+
+    pymodule.def(
+        "set_schedule",
+        []([[maybe_unused]] const std::string &kind, [[maybe_unused]] int chunk)
+        {
+#if defined(_OPENMP)
+            if (kind == "static")
+            {
+                omp_set_schedule(omp_sched_static, chunk);
+            }
+            else if (kind == "dynamic")
+            {
+                omp_set_schedule(omp_sched_dynamic, chunk);
+            }
+            else if (kind == "guided")
+            {
+                omp_set_schedule(omp_sched_guided, chunk);
+            }
+            else
+            {
+                throw std::invalid_argument("schedule must be static, dynamic, or guided");
+            }
+#endif
+        },
+        "kind"_a,
+        "chunk"_a = 0,
+        "Set how the parallel roadmap functions share edges among threads: static, dynamic, or guided.");
 
     nb::class_<vp::FCITStarNeighborParams>(pymodule, "FCITNeighborParams")
         .def(nb::init<std::size_t, double>())

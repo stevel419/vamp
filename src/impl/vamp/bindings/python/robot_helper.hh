@@ -19,6 +19,7 @@
 #include <vamp/planning/simplify.hh>
 #include <vamp/planning/plan.hh>
 #include <vamp/planning/prm.hh>
+#include <vamp/planning/pprm.hh>
 #include <vamp/planning/fcit.hh>
 #include <vamp/planning/rrtc.hh>
 #include <vamp/planning/aorrtc.hh>
@@ -235,6 +236,38 @@ namespace vamp::binding
         using GRRTStar = PlannerHelper<
             vamp::planning::GRRTStar<Robot, rake, Robot::resolution>,
             vamp::planning::GRRTStarSettings>;
+
+        using PPRM = vamp::planning::PPRM<Robot, rake, Robot::resolution>;
+
+        // The parallel planner and the roadmap functions below release the GIL while they run
+        inline static auto pprm_roadmap(
+            const Type &start,
+            const Type &goal,
+            const EnvironmentInput &environment,
+            const vamp::planning::RoadmapSettings<vamp::planning::PRMStarNeighborParams> &settings,
+            typename RNG::Ptr rng) -> Roadmap
+        {
+            const auto start_v = Input::to(start);
+            const auto goal_v = Input::to(goal);
+            const EnvironmentVector environment_v(environment);
+            nanobind::gil_scoped_release release;
+            return PPRM::build_roadmap(start_v, goal_v, environment_v, settings, rng);
+        }
+
+        inline static auto roadmap_query(
+            const Roadmap &roadmap,
+            const vamp::planning::RoadmapGraph &graph,
+            const vamp::planning::RoadmapValidity &validity,
+            const Type &start,
+            const Type &goal,
+            const EnvironmentInput &environment) -> Path
+        {
+            const auto start_v = Input::to(start);
+            const auto goal_v = Input::to(goal);
+            const EnvironmentVector environment_v(environment);
+            nanobind::gil_scoped_release release;
+            return PPRM::query(roadmap, graph, validity, start_v, goal_v, environment_v);
+        }
 
         inline static auto fk(const Type &c_in) -> std::vector<vamp::collision::Sphere<float>>
         {
@@ -559,6 +592,24 @@ namespace vamp::binding
             .def_ro(
                 "vertices", &HPN::Roadmap::vertices, "List of all vertices (configurations) in the roadmap.")
             .def_ro("edges", &HPN::Roadmap::edges, "List of all undirected edge pairs, by vertex index.")
+            .def(
+                "numpy",
+                [](const typename HPN::Roadmap &r) noexcept
+                {
+                    auto *arr = new FloatT
+                        [Robot::dimension * r.vertices.size() +
+                         (Robot::Configuration::num_scalars_rounded - Robot::dimension)];
+                    for (auto i = 0U; i < r.vertices.size(); ++i)
+                    {
+                        r.vertices[i].to_array_unaligned(arr + i * Robot::dimension);
+                    }
+
+                    nb::capsule arr_owner(
+                        arr, [](void *a) noexcept { delete[] reinterpret_cast<FloatT *>(a); });
+                    return nb::ndarray<nb::numpy, const FloatT, nb::device::cpu>(
+                        arr, {r.vertices.size(), Robot::dimension}, arr_owner);
+                },
+                "Convert the vertices of this roadmap to a numpy matrix.")
             .def_ro("nanoseconds", &HPN::Roadmap::nanoseconds, "Nanoseconds taken to construct roadmap.")
             .def_ro(
                 "iterations", &HPN::Roadmap::iterations, "Number of iterations taken to construct roadmap.");
@@ -624,6 +675,47 @@ namespace vamp::binding
            "environment"_a,
            "settings"_a,
            "rng"_a);
+
+        MF("pprm_roadmap",
+           pprm_roadmap,
+           "PRM roadmap construction with batched, multi-threaded collision checking. Gives the same "
+           "roadmap as roadmap(); the batch size is settings.batch_size.",
+           "start"_a,
+           "goal"_a,
+           "environment"_a,
+           "settings"_a,
+           "rng"_a);
+
+        MF("roadmap_query",
+           roadmap_query,
+           "Shortest path from start to goal over the valid part of a roadmap. Empty if there is none.",
+           "roadmap"_a,
+           "graph"_a,
+           "validity"_a,
+           "start"_a,
+           "goal"_a,
+           "environment"_a);
+
+        submodule.def(
+            "roadmap_graph",
+            [](const typename HPN::Roadmap &roadmap) { return HPN::PPRM::graph(roadmap); },
+            "roadmap"_a,
+            "Edges of a roadmap, each undirected edge once.");
+
+        submodule.def(
+            "revalidate",
+            [](const typename HPN::Roadmap &roadmap,
+               const vamp::planning::RoadmapGraph &graph,
+               const typename HPN::EnvironmentInput &environment)
+            {
+                const typename HPN::EnvironmentVector environment_v(environment);
+                nb::gil_scoped_release release;
+                return HPN::PPRM::revalidate(roadmap, graph, environment_v);
+            },
+            "roadmap"_a,
+            "graph"_a,
+            "environment"_a,
+            "Recheck every vertex and edge of a roadmap against an environment, multi-threaded.");
 
 #define PLANNER(name, func, desc, ...)                                                                       \
     MF(name, func::single, desc, "start"_a, "goal"_a, "environment"_a, "settings"_a, "rng"_a);               \

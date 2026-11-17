@@ -21,6 +21,11 @@ __all__ = [
     "SimplifySettings",
     "SimplifyRoutine",
     "filter_pointcloud",
+    "RoadmapGraph",
+    "RoadmapValidity",
+    "max_threads",
+    "set_num_threads",
+    "set_schedule",
     ]
 
 from pathlib import Path
@@ -47,6 +52,11 @@ from ._core import GRRTStarSettings as GRRTStarSettings
 from ._core import SimplifyRoutine as SimplifyRoutine
 from ._core import SimplifySettings as SimplifySettings
 from ._core import filter_pointcloud as filter_pointcloud
+from ._core import RoadmapGraph as RoadmapGraph
+from ._core import RoadmapValidity as RoadmapValidity
+from ._core import max_threads as max_threads
+from ._core import set_num_threads as set_num_threads
+from ._core import set_schedule as set_schedule
 
 robots = _core.robots()
 

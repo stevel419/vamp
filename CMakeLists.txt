@@ -12,6 +12,7 @@ option(VAMP_BUILD_OMPL_DEMO "Build VAMP C++ OMPL Integration Demo Scripts" OFF)
 option(VAMP_OMPL_PATH "Search Path for OMPL Installation - Only Needed for Demo Script" "")
 option(VAMP_BUILD_WASM "Build VAMP WebAssembly module" OFF)
 option(VAMP_BUILD_TESTS "Build VAMP C++ unit tests (Catch2)" OFF)
+option(VAMP_OPENMP "Use OpenMP in the parallel roadmap planner (pprm.hh)" OFF)
 
 if(VAMP_FORCE_CLANG)
   find_program(CLANG "clang")
@@ -77,6 +78,17 @@ target_link_libraries_system(vamp_cpp
 # Link SIMDxorshift if available
 if(TARGET simdxorshift)
   target_link_libraries(vamp_cpp INTERFACE simdxorshift)
+endif()
+
+# The parallel roadmap planner runs serially unless OpenMP is enabled
+if(VAMP_OPENMP)
+  # FindOpenMP has to link its test program to find the runtime library
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE EXECUTABLE)
+  find_package(OpenMP REQUIRED COMPONENTS CXX)
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+  target_link_libraries(vamp_cpp INTERFACE OpenMP::OpenMP_CXX)
+  # Keep Eigen single-threaded, as it is without OpenMP
+  target_compile_definitions(vamp_cpp INTERFACE EIGEN_DONT_PARALLELIZE)
 endif()
 
 # Set library properties
@@ -209,3 +221,4 @@ message(STATUS "  - C++ demos: ${VAMP_BUILD_CPP_DEMO}")
 message(STATUS "  - OMPL demos: ${VAMP_BUILD_OMPL_DEMO}")
 message(STATUS "  - WASM module: ${VAMP_BUILD_WASM}")
 message(STATUS "  - C++ unit tests: ${VAMP_BUILD_TESTS}")
+message(STATUS "  - OpenMP: ${VAMP_OPENMP}")
