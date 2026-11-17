@@ -289,8 +289,9 @@ namespace vamp::binding
 
             const bool in_bounds_out = (copy_out <= 1.F).all() and (copy_out >= 0.F).all();
 
+            // Check the motion at the robot's resolution, as the planners and Path.validate() do
             return (not check_bounds or (in_bounds_in and in_bounds_out)) and
-                   vamp::planning::validate_motion<Robot, rake, 1>(
+                   vamp::planning::validate_motion<Robot, rake, Robot::resolution>(
                        configuration_in, configuration_out, EnvironmentVector(environment));
         }
 
@@ -602,7 +603,7 @@ namespace vamp::binding
 
         MF("validate_motion",
            validate_motion,
-           "Check if a configuration is valid. Returns true if valid.",
+           "Check if the straight-line motion between two configurations is valid. Returns true if valid.",
            "configuration_in"_a,
            "configuration_out"_a,
            "environment"_a = vamp::collision::Environment<float>(),
